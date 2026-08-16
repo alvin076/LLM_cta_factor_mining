@@ -46,6 +46,15 @@ FACTOR_SYSTEM_TEMPLATE = r"""
 
 {FUNCTION_LIB}
 
+- 以下推荐特征（已预计算，可直接引用，非必须使用）：
+
+{RECOMMENDED_FEATURES}
+
+推荐特征使用规则：
+- 可直接用大写名称引用（无需 df 前缀），如 factor = POSITION * VOL_RATIO
+- 也可仅把它们当作思路参考：Open/High/Low/Close/Volume 是一切特征的根，
+  可以基于推荐特征的思路，用函数库在 OHLCV 上自行衍生新特征
+
 - numpy 函数（仅限这些）：np.log, np.sign, np.sqrt, np.exp, np.abs, np.clip, np.maximum, np.minimum, np.where
 - 基本运算：+ - * / ** ( ) < > == 及数字常量
 
@@ -81,7 +90,7 @@ factor = ts_mean(df['Close'], 20) / ts_std(df['Close'], 20)
 
 示例2（量价类）：
 [公式]
-factor = corr(df['Close'], df['Volume'], 30) * ts_rank(df['Volume'], 60)
+factor = ts_corr(df['Close'], df['Volume'], 30) * ts_rank(df['Volume'], 60)
 
 [经济逻辑]
 1. 捕捉什么市场现象：量价背离程度与成交活跃度的联合信号。
@@ -105,8 +114,26 @@ def build_function_lib_section() -> str:
     return "\n".join(lines)
 
 
+def build_recommended_features_section() -> str:
+    """
+    Auto-generate the recommended features section from
+    backtest/recommended_features.py. Single source of truth:
+    add/remove features there, prompt updates itself.
+    """
+    from backtest.recommended_features import RECOMMENDED_FEATURE_DOCS
+
+    lines = []
+    for name, doc in RECOMMENDED_FEATURE_DOCS.items():
+        lines.append(f"  - {name}: {doc}")
+    return "\n".join(lines)
+
+
 # Materialize the final system prompt with the live function library
-FACTOR_SYSTEM = FACTOR_SYSTEM_TEMPLATE.replace("{FUNCTION_LIB}", build_function_lib_section())
+FACTOR_SYSTEM = (
+    FACTOR_SYSTEM_TEMPLATE
+    .replace("{FUNCTION_LIB}", build_function_lib_section())
+    .replace("{RECOMMENDED_FEATURES}", build_recommended_features_section())
+)
 
 
 def build_factor_messages(direction: dict, trajectory_context: str = "") -> list:

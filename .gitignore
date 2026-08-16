@@ -14,3 +14,5 @@ trajectory.json
 
 # Test scripts
 test_*.py
+
+.vscode/

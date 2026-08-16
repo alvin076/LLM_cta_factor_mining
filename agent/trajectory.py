@@ -3,6 +3,10 @@
 Stores every research direction, its attempts, backtest results,
 and learnings. Feeds back into hypothesis generation so the agent
 evolves its research trajectory instead of blindly tweaking code.
+
+Directions are unique per (name, symbol): the same factor idea tried
+on BTCUSDT and ETHUSDT lives in two independent entries, because a
+factor failing on one coin does not imply it fails on another.
 """
 
 import json
@@ -23,37 +27,42 @@ class ResearchTrajectory:
                     self.data = json.load(f)
             except (json.JSONDecodeError, IOError):
                 self.data = {"directions": [], "updated": None}
+        for d in self.data.get("directions", []):
+            d.setdefault("symbol", "")
 
     def save(self):
         self.data["updated"] = datetime.now().isoformat(timespec="seconds")
         with open(self.path, "w", encoding="utf-8") as f:
             json.dump(self.data, f, ensure_ascii=False, indent=2)
 
-    def get_direction(self, name: str) -> dict:
+    def get_direction(self, name: str, symbol: str = "") -> dict:
         for d in self.data["directions"]:
-            if d["name"] == name:
+            if d["name"] == name and d.get("symbol", "") == symbol:
                 return d
         return None
 
-    def add_direction(self, name: str, hypothesis: str):
-        if self.get_direction(name) is None:
+    def add_direction(self, name: str, hypothesis: str, symbol: str = ""):
+        if self.get_direction(name, symbol) is None:
             self.data["directions"].append({
                 "name": name,
+                "symbol": symbol,
                 "hypothesis": hypothesis,
                 "status": "active",
                 "attempts": [],
             })
         self.save()
 
-    def add_attempt(self, direction_name: str, factor_formula: str,
+    def add_attempt(self, direction_name: str, symbol: str,
+                    factor_formula: str,
                     is_result: dict, oos_result: dict, learning: str):
-        d = self.get_direction(direction_name)
+        d = self.get_direction(direction_name, symbol)
         if d is None:
-            d = {"name": direction_name, "hypothesis": "",
+            d = {"name": direction_name, "symbol": symbol, "hypothesis": "",
                  "status": "active", "attempts": []}
             self.data["directions"].append(d)
         d["attempts"].append({
             "formula": factor_formula,
+            "symbol": symbol,
             "is_summary": {
                 "sharpe_max": is_result.get("sharpe_max"),
                 "roughness": is_result.get("roughness", {}).get("combined"),
@@ -64,22 +73,23 @@ class ResearchTrajectory:
         })
         self.save()
 
-    def update_status(self, direction_name: str, status: str):
-        d = self.get_direction(direction_name)
+    def update_status(self, direction_name: str, status: str, symbol: str = ""):
+        d = self.get_direction(direction_name, symbol)
         if d:
             d["status"] = status
             self.save()
 
-    def direction_context(self, name: str, max_attempts: int = 3) -> str:
+    def direction_context(self, name: str, symbol: str = "",
+                          max_attempts: int = 3) -> str:
         """
-        Formatted history of recent attempts for ONE direction.
+        Formatted history of recent attempts for ONE direction of ONE coin.
 
         Returns a string for injection into the Factor Generator's
         user message, or a placeholder if the direction is new.
         """
-        d = self.get_direction(name)
+        d = self.get_direction(name, symbol)
         if not d or not d["attempts"]:
-            return "（该方向此前未尝试过）"
+            return "（该方向在此币种上此前未尝试过）"
 
         lines = []
         for a in d["attempts"][-max_attempts:]:
@@ -92,18 +102,33 @@ class ResearchTrajectory:
                 lines.append(f"    教训: {a['learning']}")
         return "\n".join(lines)
 
-    def summary(self, max_directions: int = 12) -> str:
-        """Compact summary for LLM consumption."""
+    def summary(self, symbol: str = None, max_directions: int = 12) -> str:
+        """Compact summary for LLM consumption.
+
+        Args:
+            symbol: filter directions to this coin (None = all coins)
+            max_directions: cap on number of directions included
+        """
+        directions = [
+            d for d in self.data["directions"]
+            if symbol is None or d.get("symbol", "") == symbol
+        ]
+
         lines = []
-        for d in self.data["directions"][:max_directions]:
+        for d in directions[-max_directions:][::-1]:
             n_attempts = len(d["attempts"])
-            lines.append(f"方向「{d['name']}」[{d['status']}] 尝试{n_attempts}次: {d['hypothesis']}")
+            sym = d.get("symbol", "") or "?"
+            lines.append(f"方向「{d['name']}」[{sym}][{d['status']}] "
+                         f"尝试{n_attempts}次: {d['hypothesis']}")
             for a in d["attempts"][-2:]:
                 is_s = a["is_summary"]
                 oos_s = a["oos_summary"]
-                lines.append(f"  - IS Sharpe={is_s['sharpe_max']}, 粗糙度={is_s['roughness']}, OOS={oos_s}")
+                lines.append(f"  - IS Sharpe={is_s['sharpe_max']}, "
+                             f"粗糙度={is_s['roughness']}, OOS={oos_s}")
                 if a["learning"]:
                     lines.append(f"    教训: {a['learning']}")
-        if not self.data["directions"]:
-            return "（暂无研究轨迹，这是第一批研究方向）"
+        if not directions:
+            if symbol is None:
+                return "（暂无研究轨迹，这是第一批研究方向）"
+            return f"（{symbol} 暂无研究轨迹，这是该币种第一批研究方向）"
         return "\n".join(lines)

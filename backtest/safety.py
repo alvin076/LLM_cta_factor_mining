@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 
 from .factor_lib import FACTOR_FUNCTIONS
+from .recommended_features import compute_recommended_features
 
 FORBIDDEN = [
     '__builtins__', '__import__', '__class__', '__bases__', '__subclasses__',
@@ -43,6 +44,7 @@ def safe_eval(formula: str, df: pd.DataFrame) -> pd.Series:
         "pd": pd,
         "np": np,
         **FACTOR_FUNCTIONS,
+        **compute_recommended_features(df),
         "__builtins__": {
             "abs": abs,
             "min": min,

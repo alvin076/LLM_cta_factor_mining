@@ -39,8 +39,11 @@ HYPOTHESIS_SYSTEM = r"""
 DIRECTION_PATTERN = re.compile(r"\[方向\d+\]\s*(.+?)\s*\|\s*(.+)")
 
 
-def build_hypothesis_messages(trajectory_summary: str) -> list:
-    user_msg = f"以下是已有的研究轨迹：\n{trajectory_summary}\n\n请生成下一批研究方向。"
+def build_hypothesis_messages(trajectory_summary: str,
+                              symbol: str = "") -> list:
+    header = (f"当前研究标的：{symbol}\n\n" if symbol else "")
+    user_msg = (f"{header}以下是已有的研究轨迹（仅限当前标的）：\n"
+                f"{trajectory_summary}\n\n请生成下一批研究方向。")
     return [
         {"role": "system", "content": HYPOTHESIS_SYSTEM},
         {"role": "user", "content": user_msg},
@@ -61,9 +64,10 @@ def parse_directions(response: str) -> list:
 
 
 def generate_directions(chat_fn, trajectory_summary: str,
-                        model: str = None, max_tokens: int = 2048) -> dict:
+                        model: str = None, max_tokens: int = 8196,
+                        symbol: str = "") -> dict:
     """Call the LLM and return parsed directions + raw response."""
-    messages = build_hypothesis_messages(trajectory_summary)
+    messages = build_hypothesis_messages(trajectory_summary, symbol=symbol)
     result = chat_fn(messages, model=model, max_tokens=max_tokens, temperature=0.7)
     response = result["answer"]
     directions = parse_directions(response)
