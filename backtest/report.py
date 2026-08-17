@@ -54,11 +54,6 @@ def is_report(
         if wi < len(windows) and ti < len(thresholds):
             lines.append(f"  w={windows[wi]}, th={thresholds[ti]}: trades={int(trade_grid[wi, ti])}")
 
-    lines.append("")
-    lines.append("请列出你认为值得进入OOS测试的所有(w, th)参数组合。")
-    lines.append("筛选标准: IS Sharpe>0, 交易次数>50, 参数表面平滑(粗糙度低)。")
-    lines.append("用列表格式回复: [(200, 0.4), (150, 0.6), ...]")
-
     return "\n".join(lines)
 
 
@@ -142,10 +137,6 @@ def oos_report(
 
     is_degradation = _safe_ratio(oos_roughness["combined"], is_roughness["combined"])
     lines.append(f"粗糙度恶化倍数: {is_degradation:.1f}x")
-
-    lines.append("")
-    lines.append("请判断该因子是否通过OOS检验。")
-    lines.append("如果失败，分析原因并建议改进方向。")
 
     return "\n".join(lines)
 

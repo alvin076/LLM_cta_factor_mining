@@ -11,6 +11,7 @@ DEFAULT_CONFIG = {
     "selected_trades_max": 5000,
     "min_selected_params": 3,
     "oos_sharpe_min": 1.3,
+    "oos_positive_ratio_min": 0.8,
 }
 
 

@@ -16,8 +16,8 @@ def rolling_zscore(series: pd.Series, window: int) -> pd.Series:
 
     roll = series.rolling(window)
     mean = roll.mean()
-    std = roll.std(ddof=0)
-    zscore = (series - mean) / std.replace(0.0, np.nan)
+    std = roll.std()
+    zscore = (series - mean) / std
 
     return zscore
 
@@ -30,15 +30,13 @@ def generate_positions(indicator: pd.Series, threshold: float) -> pd.Series:
     indicator < -threshold  ->  short (-1)
     otherwise               ->  flat  (0)
 
-    Positions are forward-filled: once in a position, stay there
-    until the opposite signal is triggered.
+    三态信号，无持仓记忆：阈值内直接空仓；
+    暖机期的 NaN 比较结果为 False，同样落为 0（空仓）。
     """
     threshold = abs(threshold)
 
-    raw_signal = pd.Series(0, index=indicator.index, dtype=float)
-    raw_signal[indicator > threshold] = 1.0
-    raw_signal[indicator < -threshold] = -1.0
-
-    positions = raw_signal.replace(0.0, np.nan).ffill().fillna(0.0)
+    arr = np.where(indicator > threshold, 1.0,
+                   np.where(indicator < -threshold, -1.0, 0.0))
+    positions = pd.Series(arr, index=indicator.index)
 
     return positions

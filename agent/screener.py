@@ -141,3 +141,62 @@ def screen_factor(is_result: dict, cfg: dict) -> dict:
             ),
         },
     }
+
+
+def screen_oos(oos_result: dict, selected_params: list, cfg: dict) -> dict:
+    """
+    Deterministic OOS screening (2 gates).
+
+    Gate 1: at least 1 selected param with OOS Sharpe >= oos_sharpe_min
+    Gate 2: OOS Sharpe>0 ratio among selected params >= oos_positive_ratio_min
+
+    Args:
+        oos_result: grid_search() result dict from OOS data
+        selected_params: [(window, threshold), ...] chosen by IS screening
+        cfg: screening config from agent.config.load_config()
+
+    Returns:
+        dict with keys: passed, reason, qualified, stats
+    """
+    oos_lookup = {(r["window"], r["threshold"]): r for r in oos_result["results"]}
+
+    # Gate 1: at least 1 qualified param
+    qualified = [
+        (w, th, oos_lookup[(w, th)]["sharpe"])
+        for w, th in selected_params
+        if oos_lookup.get((w, th), {}).get("sharpe", 0) >= cfg["oos_sharpe_min"]
+    ]
+    if len(qualified) == 0:
+        return {
+            "passed": False,
+            "reason": f"OOS无达标参数(Sharpe>={cfg['oos_sharpe_min']})",
+            "qualified": [],
+            "stats": None,
+        }
+
+    # Gate 2: Sharpe>0 ratio >= threshold
+    pos_count = sum(1 for w, th in selected_params
+                    if oos_lookup.get((w, th), {}).get("sharpe", 0) > 0)
+    ratio = pos_count / len(selected_params) if selected_params else 0.0
+    if ratio < cfg["oos_positive_ratio_min"]:
+        return {
+            "passed": False,
+            "reason": (f"OOS Sharpe>0占比{ratio:.0%}"
+                       f"不足{cfg['oos_positive_ratio_min']:.0%}"),
+            "qualified": qualified,
+            "stats": {"positive_ratio": round(ratio, 4)},
+        }
+
+    return {
+        "passed": True,
+        "reason": "",
+        "qualified": qualified,
+        "stats": {
+            "positive_ratio": round(ratio, 4),
+            "n_qualified": len(qualified),
+            "qualified_sharpe_range": (
+                min(s for _, _, s in qualified),
+                max(s for _, _, s in qualified),
+            ),
+        },
+    }

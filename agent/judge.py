@@ -1,4 +1,4 @@
-"""Judge Agents — IS comparative evaluation and OOS verdict."""
+"""Judge Agents — IS comparative evaluation (legacy) and OOS failure analyst."""
 
 import ast
 import re
@@ -21,25 +21,37 @@ IS_JUDGE_SYSTEM = r"""
 其中 factor_index 是因子编号（从0开始）。
 """
 
-OOS_JUDGE_SYSTEM = r"""
-你是一位资深CTA策略评审官。你会收到因子在OOS（样本外）的表现，
-需要判断该因子是否真正通过检验，或只是IS过拟合。
+OOS_FAIL_ANALYST_SYSTEM = r"""
+你是一位资深CTA量化复盘分析师。一个因子通过了IS筛选但在OOS失败。
+你的任务是对比 IS 与 OOS 报告的差异，分析衰减原因，给出具体改进建议。
 
-## 判断标准
-1. OOS通过率（选中参数中Sharpe>0占比）> 60%
-2. OOS粗糙度恶化倍数 < 5x（参数表面不能在OOS崩成锯齿）
-3. IS→OOS Sharpe中位数保持率 > 40%
+## 分析角度
+1. 对比 IS 与 OOS 的 Sharpe 热力图差异：峰值位置是否漂移、幅度衰减多少
+2. 对比粗糙度：参数表面是否在OOS崩成锯齿（过拟合信号）
+3. 结合市场环境变化思考：因子逻辑在近一年为何失效
 
 ## 输出格式（严格遵循）
-[OOS判断] <通过 | 失败>
-[分析] <通过/失败的原因，1-3句话>
-[教训] <一句话总结：这个方向未来该怎么调整，或为什么这个方向可行>
+[分析] <失败原因，对比IS/OOS差异，1-3句话>
+[改进] <具体改进建议：换方向/调参数/加过滤条件，1-3句话>
+"""
+
+IS_FAIL_ANALYST_SYSTEM = r"""
+你是一位资深CTA量化复盘分析师。一个因子未通过IS代码筛选（样本内就失败）。
+你的任务是分析它为什么在样本内就失败，并给出改进建议。
+
+## 分析角度
+1. 看Sharpe热力图: 峰值是否够高、正收益区域是否成片
+2. 看粗糙度: 参数表面是否锯齿化（对参数过度敏感）
+3. 结合因子公式本身: 逻辑是否有缺陷、窗口是否不当、是否缺乏过滤条件
+
+## 输出格式（严格遵循）
+[分析] <失败原因，1-3句话>
+[改进] <具体改进建议：换方向/调参数/加过滤条件，1-3句话>
 """
 
 SELECTED_PATTERN = re.compile(r"\[SELECTED\]\s*\[(.+)\]", re.DOTALL)
-OOS_VERDICT_PATTERN = re.compile(r"\[OOS判断\]\s*(.+)")
-OOS_ANALYSIS_PATTERN = re.compile(r"\[分析\]\s*(.*?)(?=\n\[|\Z)", re.DOTALL)
-OOS_LEARNING_PATTERN = re.compile(r"\[教训\]\s*(.*?)(?=\n\[|\Z)", re.DOTALL)
+FAIL_ANALYSIS_PATTERN = re.compile(r"\[分析\]\s*(.*?)(?=\n\[|\Z)", re.DOTALL)
+FAIL_IMPROVE_PATTERN = re.compile(r"\[改进\]\s*(.*?)(?=\n\[|\Z)", re.DOTALL)
 
 
 def build_is_judge_messages(factor_reports: list) -> list:
@@ -77,27 +89,25 @@ def parse_is_selection(response: str) -> list:
         return []
 
 
-def build_oos_judge_messages(oos_report_text: str, factor_info: str) -> list:
+def build_failure_analyst_messages(is_report_text: str, oos_report_text: str,
+                                   factor_info: str, fail_reason: str) -> list:
     user_msg = (f"因子信息：{factor_info}\n\n"
-                f"以下是OOS测试结果：\n{oos_report_text}\n\n"
-                f"请给出你的判断。")
+                f"代码门槛判定：{fail_reason}\n\n"
+                f"=== IS 报告 ===\n{is_report_text}\n\n"
+                f"=== OOS 报告 ===\n{oos_report_text}\n\n"
+                f"请对比两份报告，分析OOS失败的原因并给出改进建议。")
     return [
-        {"role": "system", "content": OOS_JUDGE_SYSTEM},
+        {"role": "system", "content": OOS_FAIL_ANALYST_SYSTEM},
         {"role": "user", "content": user_msg},
     ]
 
 
-def parse_oos_verdict(response: str) -> dict:
-    verdict_m = OOS_VERDICT_PATTERN.search(response)
-    analysis_m = OOS_ANALYSIS_PATTERN.search(response)
-    learning_m = OOS_LEARNING_PATTERN.search(response)
-
-    verdict_text = verdict_m.group(1).strip() if verdict_m else ""
+def parse_failure_analysis(response: str) -> dict:
+    analysis_m = FAIL_ANALYSIS_PATTERN.search(response)
+    improve_m = FAIL_IMPROVE_PATTERN.search(response)
     return {
-        "passed": "通过" in verdict_text and "失败" not in verdict_text,
-        "verdict": verdict_text,
         "analysis": analysis_m.group(1).strip() if analysis_m else "",
-        "learning": learning_m.group(1).strip() if learning_m else "",
+        "improve": improve_m.group(1).strip() if improve_m else "",
     }
 
 
@@ -112,12 +122,43 @@ def ask_is_judge(chat_fn, factor_reports: list, model: str = None) -> dict:
     }
 
 
-def ask_oos_judge(chat_fn, oos_report_text: str, factor_info: str,
-                  model: str = None) -> dict:
-    messages = build_oos_judge_messages(oos_report_text, factor_info)
-    result = chat_fn(messages, model=model, max_tokens=2048, temperature=0.3)
+def ask_oos_failure_analyst(chat_fn, is_report_text: str, oos_report_text: str,
+                            factor_info: str, fail_reason: str,
+                            model: str = None) -> dict:
+    """LLM 复盘: 对比 IS/OOS 报告，分析失败原因 + 改进建议。
+
+    Returns:
+        dict with keys: analysis, improve, raw_response, usage
+    """
+    messages = build_failure_analyst_messages(
+        is_report_text, oos_report_text, factor_info, fail_reason)
+    result = chat_fn(messages, model=model, max_tokens=8192, temperature=0.4)
     response = result["answer"]
-    verdict = parse_oos_verdict(response)
-    verdict["raw_response"] = response
-    verdict["usage"] = result["usage"]
-    return verdict
+    analysis = parse_failure_analysis(response)
+    analysis["raw_response"] = response
+    analysis["usage"] = result["usage"]
+    return analysis
+
+
+def ask_is_failure_analyst(chat_fn, is_report_text: str,
+                           factor_info: str, fail_reason: str,
+                           model: str = None) -> dict:
+    """LLM 复盘: IS 样本内失败的原因 + 改进建议。
+
+    Returns:
+        dict with keys: analysis, improve, raw_response, usage
+    """
+    user_msg = (f"因子信息：{factor_info}\n\n"
+                f"代码门槛判定：{fail_reason}\n\n"
+                f"=== IS 报告 ===\n{is_report_text}\n\n"
+                f"请分析该因子在IS样本内失败的原因并给出改进建议。")
+    messages = [
+        {"role": "system", "content": IS_FAIL_ANALYST_SYSTEM},
+        {"role": "user", "content": user_msg},
+    ]
+    result = chat_fn(messages, model=model, max_tokens=8192, temperature=0.4)
+    response = result["answer"]
+    analysis = parse_failure_analysis(response)
+    analysis["raw_response"] = response
+    analysis["usage"] = result["usage"]
+    return analysis
